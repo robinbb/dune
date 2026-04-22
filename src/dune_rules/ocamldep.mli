@@ -55,3 +55,19 @@ val raw_deps_memo
   -> source:Path.Outside_build_dir.t
   -> ml_kind:Ml_kind.t
   -> Module_name.Set.t Memo.t
+
+(** [immediate_deps_memo ~modules ~dir ~env ~ocamldep ~unit ~ml_kind] returns
+    the intra-stanza modules that [unit]'s [ml_kind] source immediately
+    references, computed in memory via [raw_deps_memo] and resolved against
+    [modules]. Cross-library references are dropped, matching the semantics
+    of [read_immediate_deps_of]. Returns [Memo.return []] when [unit] has
+    no source for [ml_kind] or its source is in [_build/] (generated
+    sources are not yet supported by the memo path). *)
+val immediate_deps_memo
+  :  modules:Modules.With_vlib.t
+  -> dir:Path.Build.t
+  -> env:Env.t
+  -> ocamldep:Path.t
+  -> unit:Module.t
+  -> ml_kind:Ml_kind.t
+  -> Module.t list Memo.t

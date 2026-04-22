@@ -254,3 +254,23 @@ let raw_deps_memo ~env ~ocamldep ~source ~ml_kind =
   parse_deps_exn ~file:source_path lines
   |> Module_name.Set.of_list_map ~f:Module_name.of_checked_string
 ;;
+
+(* Resolve the raw module names from [raw_deps_memo] into the subset of
+   [modules] that [unit]'s [ml_kind] source immediately depends on, using
+   the same name-resolution rules as [parse_module_names] (cross-library
+   references are dropped). When [unit] has no source for [ml_kind], or
+   its source is in [_build/] (a generated file), returns the empty list
+   — the caller is expected to fall back to the [.d]-file reader in
+   those cases. *)
+let immediate_deps_memo ~modules ~dir ~env ~ocamldep ~unit ~ml_kind =
+  let open Memo.O in
+  match Module.source unit ~ml_kind with
+  | None -> Memo.return []
+  | Some file ->
+    (match Path.as_outside_build_dir (Module.File.path file) with
+     | None -> Memo.return []
+     | Some source ->
+       let+ names = raw_deps_memo ~env ~ocamldep ~source ~ml_kind in
+       Module_name.Set.to_list_map names ~f:Module_name.to_string
+       |> parse_module_names ~dir ~unit ~modules)
+;;
