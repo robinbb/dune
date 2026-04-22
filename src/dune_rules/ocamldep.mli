@@ -43,3 +43,15 @@ val read_immediate_deps_raw_of
   -> for_:Compilation_mode.t
   -> Module.t
   -> Module_name.Set.t Action_builder.t
+
+(** [raw_deps_memo ~env ~ocamldep ~source ~ml_kind] runs [ocamldep -modules]
+    on [source] as a memoised computation keyed on the source file's content
+    digest. Returns the raw set of module names ocamldep emits, the same
+    shape [read_immediate_deps_raw_of] currently reads from a [.d] file.
+    Does not produce any build artefacts. *)
+val raw_deps_memo
+  :  env:Env.t
+  -> ocamldep:Path.t
+  -> source:Path.Outside_build_dir.t
+  -> ml_kind:Ml_kind.t
+  -> Module_name.Set.t Memo.t

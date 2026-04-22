@@ -228,3 +228,29 @@ let read_immediate_deps_raw_of ~obj_dir ~ml_kind ~for_ unit =
   | None -> Module_name.Set.empty
   | Some names -> Module_name.Set.of_list_map names ~f:Module_name.of_checked_string
 ;;
+
+(* Run ocamldep on a single source file as a memoised computation rather
+   than as an [Action_builder] build rule. The computation depends on the
+   source file's content digest via [Fs_memo.file_digest]; when the
+   source is unchanged across builds, dune's memo system serves the
+   cached result without re-reading the file or re-invoking ocamldep.
+   Produces no build artefact (no [.d]/[.all-deps] in [_build/]). *)
+let raw_deps_memo ~env ~ocamldep ~source ~ml_kind =
+  let open Memo.O in
+  let source_path = Path.outside_build_dir source in
+  let* (_ : Dune_digest.Digest_result.t) = Fs_memo.file_digest source in
+  let+ lines =
+    Process.run_capture_lines
+      ~display:Quiet
+      ~env
+      Strict
+      ocamldep
+      [ "-modules"
+      ; Ml_kind.choose ml_kind ~impl:"-impl" ~intf:"-intf"
+      ; Path.to_string source_path
+      ]
+    |> Memo.of_reproducible_fiber
+  in
+  parse_deps_exn ~file:source_path lines
+  |> Module_name.Set.of_list_map ~f:Module_name.of_checked_string
+;;
