@@ -40,7 +40,30 @@ let lib_deps_for_module ~cctx ~obj_dir ~for_ ~dep_graph ~opaque ~cm_kind ~ml_kin
     then Action_builder.return ((), Lib_file_deps.deps_of_entries ~opaque ~cm_kind libs)
     else
       let* lib_index = Resolve.Memo.read (Compilation_context.lib_index cctx) in
+      let context = Super_context.context (Compilation_context.super_context cctx) in
+      let* env = Action_builder.of_memo (Context.installed_env context) in
+      let* ocamldep_prog =
+        Action_builder.of_memo
+          (let open Memo.O in
+           let+ ocaml = Context.ocaml context in
+           ocaml.ocamldep)
+      in
       let* trans_deps = Dep_graph.deps_of dep_graph m in
+      (* For each module, return its raw ocamldep module-name set. Use the
+         memoised [raw_deps_memo] when the module has no preprocessing and
+         its source is in the project source tree; otherwise fall back to
+         the [.d]-file reader (which depends on the build-rule ocamldep
+         pipeline that [dep_rules.ml] still emits). *)
+      let raw_deps_of ~ml_kind dep_m =
+        let source =
+          Option.bind (Module.source ~ml_kind dep_m) ~f:(fun file ->
+            Path.as_outside_build_dir (Module.File.path file))
+        in
+        match Module.pp_flags dep_m, ocamldep_prog, source with
+        | None, Ok ocamldep, Some source ->
+          Action_builder.of_memo (Ocamldep.raw_deps_memo ~env ~ocamldep ~source ~ml_kind)
+        | _ -> Ocamldep.read_immediate_deps_raw_of ~obj_dir ~ml_kind ~for_ dep_m
+      in
       let* all_raw =
         Action_builder.List.map (m :: trans_deps) ~f:(fun dep_m ->
           let is_standard_kind =
@@ -51,12 +74,8 @@ let lib_deps_for_module ~cctx ~obj_dir ~for_ ~dep_graph ~opaque ~cm_kind ~ml_kin
           if not is_standard_kind
           then Action_builder.return Module_name.Set.empty
           else
-            let* impl_deps =
-              Ocamldep.read_immediate_deps_raw_of ~obj_dir ~ml_kind:Impl ~for_ dep_m
-            in
-            let+ intf_deps =
-              Ocamldep.read_immediate_deps_raw_of ~obj_dir ~ml_kind:Intf ~for_ dep_m
-            in
+            let* impl_deps = raw_deps_of ~ml_kind:Impl dep_m in
+            let+ intf_deps = raw_deps_of ~ml_kind:Intf dep_m in
             Module_name.Set.union impl_deps intf_deps)
         |> Action_builder.map
              ~f:(List.fold_left ~init:Module_name.Set.empty ~f:Module_name.Set.union)
