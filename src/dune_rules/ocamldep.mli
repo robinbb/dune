@@ -56,13 +56,25 @@ val raw_deps_memo
   -> ml_kind:Ml_kind.t
   -> Module_name.Set.t Memo.t
 
+(** [source_of_file file] recovers a [Path.Outside_build_dir.t] suitable for
+    [Fs_memo.file_digest] from a [Module.File.t]. Paths already outside
+    [_build/] pass through. Staged real sources (paths under
+    [_build/<context>/]) are remapped to the source tree via
+    [Path.Build.drop_build_context]. Returns [None] for paths with no
+    source-tree counterpart — rule-generated files whose content is
+    produced by an upstream build rule. *)
+val source_of_file : Module.File.t -> Path.Outside_build_dir.t option
+
 (** [immediate_deps_memo ~modules ~dir ~env ~ocamldep ~unit ~ml_kind] returns
     the intra-stanza modules that [unit]'s [ml_kind] source immediately
-    references, computed in memory via [raw_deps_memo] and resolved against
-    [modules]. Cross-library references are dropped, matching the semantics
-    of [read_immediate_deps_of]. Returns [Memo.return []] when [unit] has
-    no source for [ml_kind] or its source is in [_build/] (generated
-    sources are not yet supported by the memo path). *)
+    references, augmented with [implicit_deps] to match the shape the
+    build-rule [deps_of] path produces. Cross-library references are
+    dropped, matching the semantics of [read_immediate_deps_of]. Returns
+    only the implicit-deps contribution when [unit] has no source for
+    [ml_kind], when the source is flagged [implicit] (dune-synthesised
+    with statically-empty ocamldep output), or when the source's build
+    path has no source-tree counterpart (the caller is expected to fall
+    back to the build-rule path in that case). *)
 val immediate_deps_memo
   :  modules:Modules.With_vlib.t
   -> dir:Path.Build.t

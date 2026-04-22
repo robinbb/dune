@@ -255,24 +255,57 @@ let raw_deps_memo ~env ~ocamldep ~source ~ml_kind =
   |> Module_name.Set.of_list_map ~f:Module_name.of_checked_string
 ;;
 
+(* [Module.File.path] holds a staged [_build/<context>/…] path even for
+   files the user authored. Recover the source-tree path that
+   [Fs_memo.file_digest] can consume by stripping the context prefix via
+   [Path.Build.drop_build_context]. Paths already outside [_build/]
+   (e.g. external sources) pass through. Returns [None] for files whose
+   path has no source-tree counterpart — rule-generated sources whose
+   content comes from an upstream build rule rather than the source
+   tree. Callers that encounter [None] must fall back to a path that
+   can read the build-time file. *)
+let source_of_file file : Path.Outside_build_dir.t option =
+  let p = Module.File.path file in
+  match Path.as_outside_build_dir p with
+  | Some outside -> Some outside
+  | None ->
+    (match Path.as_in_build_dir p with
+     | None -> None
+     | Some bp ->
+       Path.Build.drop_build_context bp
+       |> Option.map ~f:(fun src -> Path.Outside_build_dir.In_source_dir src))
+;;
+
 (* Resolve the raw module names from [raw_deps_memo] into the subset of
    [modules] that [unit]'s [ml_kind] source immediately depends on, using
    the same name-resolution rules as [parse_module_names] (cross-library
-   references are dropped). When [unit] has no source for [ml_kind], or
-   its source is in [_build/] (a generated file), returns the empty list
-   — the caller is expected to fall back to the [.d]-file reader in
-   those cases. *)
+   references are dropped). Augments with [implicit_deps] to match the
+   shape produced by [deps_of]'s subprocess path.
+
+   Returns [Memo.return []] in three cases that all semantically denote
+   "no intra-stanza dependencies":
+   - [unit] has no source for [ml_kind] at all;
+   - the source is flagged [implicit] — synthesised by dune itself (the
+     empty interface stub from [with_empty_intf], alias/root [ml-gen]
+     bodies, wrapped-compat shims) — and so has statically-empty deps;
+   - [Module.File.path]'s build path has no source-tree counterpart and
+     the caller is expected to fall back to the build-rule path. *)
 let immediate_deps_memo ~modules ~dir ~env ~ocamldep ~unit ~ml_kind =
   let open Memo.O in
+  let implicit = Modules.With_vlib.implicit_deps modules ~of_:unit in
   match Module.source unit ~ml_kind with
-  | None -> Memo.return []
+  | None -> Memo.return implicit
+  | Some file when Module.File.implicit file -> Memo.return implicit
   | Some file ->
-    (match Path.as_outside_build_dir (Module.File.path file) with
-     | None -> Memo.return []
+    (match source_of_file file with
+     | None -> Memo.return implicit
      | Some source ->
        let+ names = raw_deps_memo ~env ~ocamldep ~source ~ml_kind in
-       Module_name.Set.to_list_map names ~f:Module_name.to_string
-       |> parse_module_names ~dir ~unit ~modules)
+       let parsed =
+         Module_name.Set.to_list_map names ~f:Module_name.to_string
+         |> parse_module_names ~dir ~unit ~modules
+       in
+       implicit @ parsed)
 ;;
 
 module Parallel_map = Memo.Make_parallel_map (Module_name.Unique.Map)
