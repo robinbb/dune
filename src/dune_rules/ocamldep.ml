@@ -274,3 +274,57 @@ let immediate_deps_memo ~modules ~dir ~env ~ocamldep ~unit ~ml_kind =
        Module_name.Set.to_list_map names ~f:Module_name.to_string
        |> parse_module_names ~dir ~unit ~modules)
 ;;
+
+module Parallel_map = Memo.Make_parallel_map (Module_name.Unique.Map)
+
+(* Build an intra-stanza map from [obj_name] to the immediate dependency
+   list discovered by [immediate_deps_memo] for every module in
+   [modules], concurrently. Each per-module [raw_deps_memo] cell is
+   cached on its source-file digest, so repeat calls within a build are
+   free after the first. *)
+let immediate_deps_map_memo ~modules ~dir ~env ~ocamldep ~ml_kind =
+  Modules.With_vlib.obj_map modules
+  |> Parallel_map.parallel_map ~f:(fun _obj_name sm ->
+    let unit = Modules.Sourced_module.to_module sm in
+    immediate_deps_memo ~modules ~dir ~env ~ocamldep ~unit ~ml_kind)
+;;
+
+module Top_closure_id =
+  Top_closure.Make (Module_name.Unique.Set) (Monad.Id)
+
+(* Pure transitive closure of a module's intra-stanza dependencies,
+   computed from a pre-built immediate-deps map. Matches the shape of
+   what the [.all-deps] file would contain: the module's transitive
+   closure, minus the module itself. Dependency cycles surface as a
+   [User_error] with the same wording [Dep_graph.top_closed] uses for
+   the build-rule path, so test expectations remain invariant across
+   the memo migration. *)
+let transitive_closure_from_map ~immediate ~dir (unit : Module.t) =
+  let result =
+    Top_closure_id.top_closure
+      [ unit ]
+      ~key:Module.obj_name
+      ~deps:(fun m ->
+        Module_name.Unique.Map.find immediate (Module.obj_name m)
+        |> Option.value ~default:[])
+  in
+  match result with
+  | Ok modules ->
+    List.filter modules ~f:(fun m ->
+      not (Module_name.Unique.equal (Module.obj_name m) (Module.obj_name unit)))
+  | Error cycle ->
+    User_error.raise
+      [ Pp.textf "dependency cycle between modules in %s:" (Path.Build.to_string dir)
+      ; Pp.chain cycle ~f:(fun m -> Pp.verbatim (Module_name.to_string (Module.name m)))
+      ]
+;;
+
+(* Same shape as [read_deps_of] / [deps_of], but computed entirely in
+   memory from [raw_deps_memo] results. No build rules, no [.d] or
+   [.all-deps] files. The returned list is the transitive closure of
+   [unit]'s intra-stanza dependencies, excluding [unit] itself. *)
+let deps_of_memo ~modules ~dir ~env ~ocamldep ~ml_kind unit =
+  let open Memo.O in
+  let+ immediate = immediate_deps_map_memo ~modules ~dir ~env ~ocamldep ~ml_kind in
+  transitive_closure_from_map ~immediate ~dir unit
+;;

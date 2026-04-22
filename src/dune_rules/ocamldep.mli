@@ -71,3 +71,21 @@ val immediate_deps_memo
   -> unit:Module.t
   -> ml_kind:Ml_kind.t
   -> Module.t list Memo.t
+
+(** [deps_of_memo ~modules ~dir ~env ~ocamldep ~ml_kind unit] returns the
+    transitive intra-stanza dependencies of [unit] for [ml_kind], the same
+    shape the existing [.all-deps] file produces (the module's closure
+    excluding itself). Computed in-memory from [raw_deps_memo] results;
+    emits no build rules. Cycles raise [User_error] with the same wording
+    [Dep_graph.top_closed] uses for the build-rule path. Modules with
+    generated sources (in [_build/]) contribute the empty immediate-dep
+    set via [immediate_deps_memo]; callers that need the build-rule path
+    for such modules must gate calls to this function. *)
+val deps_of_memo
+  :  modules:Modules.With_vlib.t
+  -> dir:Path.Build.t
+  -> env:Env.t
+  -> ocamldep:Path.t
+  -> ml_kind:Ml_kind.t
+  -> Module.t
+  -> Module.t list Memo.t
