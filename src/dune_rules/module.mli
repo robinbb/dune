@@ -8,7 +8,21 @@ module File : sig
   val dialect : t -> Dialect.t
   val path : t -> Path.t
   val original_path : t -> Path.t
-  val make : ?original_path:Path.t -> Dialect.t -> Path.t -> t
+
+  (** [implicit t] reports whether this file was synthesised by dune rather
+      than authored by the user. The motivating case is the empty [.mli]
+      that [executables_implicit_empty_intf] adds for executable main
+      modules; its content is a single-line comment, so its dependency set
+      is trivially empty and the memoised ocamldep path can skip running
+      the compiler's front-end on it. *)
+  val implicit : t -> bool
+
+  val make
+    :  ?original_path:Path.t
+    -> ?implicit:bool
+    -> Dialect.t
+    -> Path.t
+    -> t
 end
 
 module Kind : sig

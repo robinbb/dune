@@ -7,6 +7,12 @@ module File = struct
       (* while path can be changed for a module (when it is being pp'ed), the
            original_path stays the same and points to an original source file *)
     ; dialect : Dialect.t
+    ; implicit : bool
+      (* [true] when this file was not written by the user but synthesised
+         by dune (e.g. the empty interface added for executables via
+         [executables_implicit_empty_intf]). Such files have a known-empty
+         dependency set and can be skipped by the memoised ocamldep path
+         without running the compiler's front-end. *)
     }
 
   let decode ~dir =
@@ -14,10 +20,14 @@ module File = struct
     fields
     @@ let+ path = field "path" (Dune_lang.Path.Local.decode ~dir) in
        (* TODO do not just assume the dialect is OCaml *)
-       { path; original_path = path; dialect = Dialect.ocaml }
+       { path
+       ; original_path = path
+       ; dialect = Dialect.ocaml
+       ; implicit = false
+       }
   ;;
 
-  let encode { path; original_path = _; dialect = _ } ~dir =
+  let encode { path; original_path = _; dialect = _; implicit = _ } ~dir =
     let open Dune_lang.Encoder in
     record_fields [ field "path" (Dune_lang.Path.Local.encode ~dir) path ]
   ;;
@@ -25,6 +35,7 @@ module File = struct
   let dialect t = t.dialect
   let path t = t.path
   let original_path t = t.original_path
+  let implicit t = t.implicit
 
   let version_installed t ~src_root ~install_dir =
     let path =
@@ -36,17 +47,18 @@ module File = struct
     { t with path }
   ;;
 
-  let make ?original_path dialect path =
+  let make ?original_path ?(implicit = false) dialect path =
     let original_path = Option.value original_path ~default:path in
-    { dialect; path; original_path }
+    { dialect; path; original_path; implicit }
   ;;
 
-  let to_dyn { path; original_path; dialect } =
+  let to_dyn { path; original_path; dialect; implicit } =
     let open Dyn in
     record
       [ "path", Path.to_dyn path
       ; "original_path", Path.to_dyn original_path
       ; "dialect", Dyn.string @@ Dialect.name dialect
+      ; "implicit", Dyn.bool implicit
       ]
   ;;
 end
@@ -321,7 +333,12 @@ let wrapped_compat t =
              ^ Filename.Extension.(to_string ml_gen))
           ]
       in
-      Some { File.dialect = Dialect.ocaml; path; original_path = path }
+      Some
+        { File.dialect = Dialect.ocaml
+        ; path
+        ; original_path = path
+        ; implicit = true
+        }
     in
     { t.source with files = { intf = None; impl } }
   in
@@ -451,7 +468,9 @@ let generated
         | Ocaml -> src_dir
         | Melange -> src_dir
       in
-      Path.Build.relative src_dir basename |> Path.build |> File.make Dialect.ocaml
+      Path.Build.relative src_dir basename
+      |> Path.build
+      |> File.make ~implicit:true Dialect.ocaml
     in
     Source.make ~impl:(Some impl) ~intf:None path
   in
