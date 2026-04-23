@@ -458,6 +458,17 @@ let generated
     | Some obj_name -> obj_name
     | None -> Module_name.Path.wrap path
   in
+  (* [Module.generated] is used both for dune's own alias/root
+     stubs (whose [.ml-gen] bodies have statically-empty ocamldep
+     output) and for generators like cinaps / toplevel / ppx-driver
+     that emit real code referencing libraries. Flag only the
+     empty-body variants as [implicit]; the memo path then knows it
+     can skip invoking ocamldep on them without missing real deps. *)
+  let is_implicit =
+    match (kind : Kind.t) with
+    | Alias _ | Root -> true
+    | _ -> false
+  in
   let source =
     let impl =
       let basename =
@@ -470,7 +481,7 @@ let generated
       in
       Path.Build.relative src_dir basename
       |> Path.build
-      |> File.make ~implicit:true Dialect.ocaml
+      |> File.make ~implicit:is_implicit Dialect.ocaml
     in
     Source.make ~impl:(Some impl) ~intf:None path
   in
