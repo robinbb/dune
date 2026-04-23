@@ -234,25 +234,78 @@ let read_immediate_deps_raw_of ~obj_dir ~ml_kind ~for_ unit =
    source file's content digest via [Fs_memo.file_digest]; when the
    source is unchanged across builds, dune's memo system serves the
    cached result without re-reading the file or re-invoking ocamldep.
-   Produces no build artefact (no [.d]/[.all-deps] in [_build/]). *)
-let raw_deps_memo ~env ~ocamldep ~source ~ml_kind =
-  let open Memo.O in
-  let source_path = Path.outside_build_dir source in
-  let* (_ : Dune_digest.Digest_result.t) = Fs_memo.file_digest source in
-  let+ lines =
-    Process.run_capture_lines
-      ~display:Quiet
-      ~env
-      Strict
-      ocamldep
-      [ "-modules"
-      ; Ml_kind.choose ml_kind ~impl:"-impl" ~intf:"-intf"
-      ; Path.to_string source_path
-      ]
-    |> Memo.of_reproducible_fiber
+   Produces no build artefact (no [.d]/[.all-deps] in [_build/]).
+
+   Caching is keyed on [(source, ml_kind)] via [Memo.create] so that
+   repeat calls with the same arguments share one memo cell and spawn
+   ocamldep at most once per (source, ml_kind) per build. Without this
+   explicit cell every caller would construct a fresh [Memo.t] and the
+   same ocamldep invocation would fire on every evaluation. [env] and
+   [ocamldep] are stable within a build context, so keying on them is
+   unnecessary; they're captured implicitly per memo cell via [Memo.cell]
+   closure. *)
+module Raw_deps_key = struct
+  type t = Path.Outside_build_dir.t * Ml_kind.t
+
+  let ml_kind_tag : Ml_kind.t -> int = function
+    | Impl -> 0
+    | Intf -> 1
+  ;;
+
+  let equal (s1, k1) (s2, k2) =
+    Path.Outside_build_dir.equal s1 s2 && ml_kind_tag k1 = ml_kind_tag k2
+  ;;
+
+  let hash (s, k) =
+    Tuple.T2.hash Path.Outside_build_dir.hash Int.hash (s, ml_kind_tag k)
+  ;;
+
+  let to_dyn (s, k) =
+    let open Dyn in
+    Tuple [ Path.Outside_build_dir.to_dyn s; Ml_kind.to_dyn k ]
+  ;;
+end
+
+let raw_deps_memo =
+  let impl ~env ~ocamldep (source, ml_kind) =
+    let open Memo.O in
+    let source_path = Path.outside_build_dir source in
+    let* (_ : Dune_digest.Digest_result.t) = Fs_memo.file_digest source in
+    let+ lines =
+      Process.run_capture_lines
+        ~display:Quiet
+        ~env
+        Strict
+        ocamldep
+        [ "-modules"
+        ; Ml_kind.choose ml_kind ~impl:"-impl" ~intf:"-intf"
+        ; Path.to_string source_path
+        ]
+      |> Memo.of_reproducible_fiber
+    in
+    parse_deps_exn ~file:source_path lines
+    |> Module_name.Set.of_list_map ~f:Module_name.of_checked_string
   in
-  parse_deps_exn ~file:source_path lines
-  |> Module_name.Set.of_list_map ~f:Module_name.of_checked_string
+  (* One memo cell per unique [(env, ocamldep)] pair. In practice there
+     is a single pair per build context, so the outer [Table] is usually
+     size 1-2; what matters is that each (source, ml_kind) reuses the
+     inner memo's cache instead of reconstructing it on every call. *)
+  let table = Table.create (module Path) 4 in
+  fun ~env ~ocamldep ~source ~ml_kind ->
+    let memo =
+      match Table.find table ocamldep with
+      | Some m -> m
+      | None ->
+        let m =
+          Memo.create
+            "raw_deps_memo"
+            ~input:(module Raw_deps_key)
+            (impl ~env ~ocamldep)
+        in
+        Table.set table ocamldep m;
+        m
+    in
+    Memo.exec memo (source, ml_kind)
 ;;
 
 (* [Module.File.path] holds a staged [_build/<context>/…] path even for
