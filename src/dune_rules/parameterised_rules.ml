@@ -277,7 +277,7 @@ let build_modules ~sctx ~obj_dir ~modules_obj_dir ~dep_graph ~mode ~requires ~li
     Module_name.Map.add_exn acc (Module.name module_) instance)
 ;;
 
-let dep_graph ~ocaml_version ~preprocess ~obj_dir ~modules impl_only =
+let dep_graph ~sctx ~ocaml_version ~preprocess ~obj_dir ~modules impl_only =
   let pp_map =
     Staged.unstage
     @@ Pp_spec.pped_modules_map
@@ -291,7 +291,13 @@ let dep_graph ~ocaml_version ~preprocess ~obj_dir ~modules impl_only =
         let open Action_builder.O in
         let module_ = pp_map module_ in
         let+ deps =
-          Dep_rules.read_immediate_deps_of module_ ~modules ~obj_dir ~ml_kind:Impl ~for_
+          Dep_rules.read_immediate_deps_of
+            ~sctx
+            module_
+            ~modules
+            ~obj_dir
+            ~ml_kind:Impl
+            ~for_
         in
         let local_open = Modules.With_vlib.alias_for modules module_ in
         local_open @ deps
@@ -331,6 +337,7 @@ let instantiate ~sctx lib =
   let impl_only = Modules.With_vlib.impl_only modules in
   let dep_graph =
     dep_graph
+      ~sctx
       ~ocaml_version:ocaml.version
       ~preprocess:(Lib_info.preprocess ~for_ lib_info)
       ~obj_dir:deps_obj_dir

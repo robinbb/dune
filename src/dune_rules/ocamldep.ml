@@ -292,20 +292,35 @@ let source_of_file file : Path.Outside_build_dir.t option =
      the caller is expected to fall back to the build-rule path. *)
 let immediate_deps_memo ~modules ~dir ~env ~ocamldep ~unit ~ml_kind =
   let open Memo.O in
-  let implicit = Modules.With_vlib.implicit_deps modules ~of_:unit in
   match Module.source unit ~ml_kind with
-  | None -> Memo.return implicit
-  | Some file when Module.File.implicit file -> Memo.return implicit
+  | None ->
+    (* No source for this [ml_kind]: the build-rule path short-circuits
+       via [skip_if_source_absent] to the empty list; match that here
+       instead of returning [implicit_deps]. *)
+    Memo.return []
   | Some file ->
-    (match source_of_file file with
-     | None -> Memo.return implicit
-     | Some source ->
-       let+ names = raw_deps_memo ~env ~ocamldep ~source ~ml_kind in
-       let parsed =
-         Module_name.Set.to_list_map names ~f:Module_name.to_string
-         |> parse_module_names ~dir ~unit ~modules
-       in
-       implicit @ parsed)
+    let implicit = Modules.With_vlib.implicit_deps modules ~of_:unit in
+    if Module.File.implicit file
+    then
+      (* [Module.File.implicit]: file synthesised by dune (empty [.mli]
+         stub, [.ml-gen] body). ocamldep on it would return the empty
+         set; match that plus [implicit_deps]. *)
+      Memo.return implicit
+    else (
+      match source_of_file file with
+      | None ->
+        (* Source path has no source-tree counterpart. The caller that
+           gated on [stanza_can_use_memo] ensures we never reach here
+           for memoisable stanzas, but be defensive: yield the same
+           shape the source-absent case does. *)
+        Memo.return []
+      | Some source ->
+        let+ names = raw_deps_memo ~env ~ocamldep ~source ~ml_kind in
+        let parsed =
+          Module_name.Set.to_list_map names ~f:Module_name.to_string
+          |> parse_module_names ~dir ~unit ~modules
+        in
+        implicit @ parsed)
 ;;
 
 module Parallel_map = Memo.Make_parallel_map (Module_name.Unique.Map)

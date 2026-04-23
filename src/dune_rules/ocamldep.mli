@@ -101,3 +101,30 @@ val deps_of_memo
   -> ml_kind:Ml_kind.t
   -> Module.t
   -> Module.t list Memo.t
+
+(** [immediate_deps_map_memo] builds a per-stanza map from every
+    module's [obj_name] to the immediate dependency list
+    [immediate_deps_memo] discovers. Exposed so consumers that need
+    closures for multiple modules in the same stanza can amortise the
+    map's construction; the underlying [raw_deps_memo] cells are
+    cached on each source file's digest. *)
+val immediate_deps_map_memo
+  :  modules:Modules.With_vlib.t
+  -> dir:Path.Build.t
+  -> env:Env.t
+  -> ocamldep:Path.t
+  -> ml_kind:Ml_kind.t
+  -> Module.t list Module_name.Unique.Map.t Memo.t
+
+(** [transitive_closure_from_map ~immediate ~dir unit] computes [unit]'s
+    intra-stanza transitive closure from a precomputed
+    [immediate_deps_map_memo] result, using [Top_closure] over the
+    [Monad.Id] monad. Pure — no memo calls, no build rules. Cycles
+    raise [User_error] with the same wording [Dep_graph.top_closed]
+    uses for the build-rule path. The returned list excludes [unit]
+    itself. *)
+val transitive_closure_from_map
+  :  immediate:Module.t list Module_name.Unique.Map.t
+  -> dir:Path.Build.t
+  -> Module.t
+  -> Module.t list

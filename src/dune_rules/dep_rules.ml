@@ -189,11 +189,86 @@ let rec deps_of
        | Impl -> Normal m))
 ;;
 
+(* A stanza qualifies for the in-memory memo path when every module:
+   - is [Normal] (no virtual-library machinery, no [Virtual] kind), and
+   - has no preprocessing, and
+   - either has an [implicit] source (dune-synthesised; known-empty
+     deps), or has every present source's [source_of_file] path
+     existing on disk (rule-generated sources like menhir output have
+     a [_build/]-only source and fail this check).
+
+   [Virtual] modules mark the stanza as a virtual library — other
+   stanzas implementing it consume this stanza's [.all-deps] files via
+   [deps_of_vlib_module]'s symlink rule, so a vlib stanza must keep
+   emitting those files regardless of whether its own modules' deps
+   could be computed in memory. Rejecting [Virtual] forces the whole
+   vlib stanza onto the build-rule pipeline, preserving the symlinks
+   that cross-stanza implementations rely on.
+
+   Violating any condition forces the stanza onto the build-rule
+   pipeline, because the transitive closure reads each reachable
+   module's immediate-dep set and a single wrong entry poisons the
+   closure. The source-existence probe is async (uses
+   [Fs_memo.file_exists]), so the whole gate is a [bool Memo.t]. *)
+let stanza_can_use_memo modules : bool Memo.t =
+  Modules.With_vlib.obj_map modules
+  |> Module_name.Unique.Map.to_list
+  |> Memo.List.for_all ~f:(fun (_, (sm : Modules.Sourced_module.t)) ->
+    match sm with
+    | Imported_from_vlib _ | Impl_of_virtual_module _ -> Memo.return false
+    | Normal m ->
+      (match Module.kind m with
+       | Root | Alias _ | Wrapped_compat -> Memo.return true
+       | Virtual -> Memo.return false
+       | Intf_only | Impl | Impl_vmodule | Parameter ->
+         if Option.is_some (Module.pp_flags m)
+         then Memo.return false
+         else
+           Memo.List.for_all [ Ml_kind.Impl; Ml_kind.Intf ] ~f:(fun ml_kind ->
+             match Module.source m ~ml_kind with
+             | None -> Memo.return true
+             | Some file ->
+               if Module.File.implicit file
+               then Memo.return true
+               else (
+                 match Ocamldep.source_of_file file with
+                 | None -> Memo.return false
+                 | Some src -> Fs_memo.file_exists src))))
+;;
+
+(* Per-stanza immediate-deps map computed via memo, when the stanza
+   qualifies. Returned as an [option] so callers can fall back to the
+   file-based readers for stanzas the memo path can't handle. *)
+let immediate_map_memo_opt ~sctx ~modules ~dir ~ml_kind
+  : Module.t list Module_name.Unique.Map.t option Memo.t
+  =
+  let* gate = stanza_can_use_memo modules in
+  if not gate
+  then Memo.return None
+  else (
+    let context = Super_context.context sctx in
+    let* ocamldep_prog =
+      let+ ocaml = Context.ocaml context in
+      ocaml.ocamldep
+    in
+    match ocamldep_prog with
+    | Error _ -> Memo.return None
+    | Ok ocamldep ->
+      let* env = Context.installed_env context in
+      let+ map =
+        Ocamldep.immediate_deps_map_memo ~modules ~dir ~env ~ocamldep ~ml_kind
+      in
+      Some map)
+;;
+
 (* [read_deps_of_module] reports intra-stanza module dependencies. For
    single-module stanzas that dependency graph is trivially empty
-   regardless of whether the stanza declares library dependencies, so we
-   keep the unconditional short-circuit here. *)
-let read_deps_of_module ~modules ~obj_dir dep ~for_ =
+   regardless of whether the stanza declares library dependencies, so
+   we keep the unconditional short-circuit here. When the stanza
+   qualifies for the memo path, deps are computed in-memory from the
+   memoised ocamldep invocations; otherwise they're read from the
+   [.d]/[.all-deps] files the build-rule pipeline emits. *)
+let read_deps_of_module ~sctx ~modules ~obj_dir dep ~for_ =
   let (Obj_dir.Module.Dep.Immediate (unit, _) | Transitive (unit, _)) = dep in
   match Module.kind unit with
   | Root | Alias _ -> Action_builder.return []
@@ -202,24 +277,55 @@ let read_deps_of_module ~modules ~obj_dir dep ~for_ =
     if has_single_file modules
     then Action_builder.return []
     else (
-      match dep with
-      | Immediate (unit, ml_kind) ->
-        Ocamldep.read_immediate_deps_of ~obj_dir ~modules ~ml_kind ~for_ unit
-      | Transitive (unit, ml_kind) ->
-        let open Action_builder.O in
-        let+ deps = Ocamldep.read_deps_of ~obj_dir ~modules ~ml_kind ~for_ unit in
-        (match Modules.With_vlib.alias_for modules unit with
-         | [] -> deps
-         | aliases -> aliases @ deps))
+      let via_files ~dep =
+        match dep with
+        | Obj_dir.Module.Dep.Immediate (unit, ml_kind) ->
+          Ocamldep.read_immediate_deps_of ~obj_dir ~modules ~ml_kind ~for_ unit
+        | Transitive (unit, ml_kind) ->
+          let open Action_builder.O in
+          let+ deps = Ocamldep.read_deps_of ~obj_dir ~modules ~ml_kind ~for_ unit in
+          (match Modules.With_vlib.alias_for modules unit with
+           | [] -> deps
+           | aliases -> aliases @ deps)
+      in
+      let via_memo ~dep ~map =
+        match dep with
+        | Obj_dir.Module.Dep.Immediate (unit, _ml_kind) ->
+          Module_name.Unique.Map.find map (Module.obj_name unit)
+          |> Option.value ~default:[]
+          |> Action_builder.return
+        | Transitive (unit, _ml_kind) ->
+          let dir = Obj_dir.dir obj_dir in
+          let transitive =
+            Ocamldep.transitive_closure_from_map ~immediate:map ~dir unit
+          in
+          let with_aliases =
+            match Modules.With_vlib.alias_for modules unit with
+            | [] -> transitive
+            | aliases -> aliases @ transitive
+          in
+          Action_builder.return with_aliases
+      in
+      let dir = Obj_dir.dir obj_dir in
+      let ml_kind =
+        match dep with
+        | Immediate (_, k) | Transitive (_, k) -> k
+      in
+      Action_builder.bind
+        (Action_builder.of_memo
+           (immediate_map_memo_opt ~sctx ~modules ~dir ~ml_kind))
+        ~f:(function
+          | Some map -> via_memo ~dep ~map
+          | None -> via_files ~dep))
 ;;
 
-let read_immediate_deps_of ~obj_dir ~modules ~ml_kind ~for_ m =
-  read_deps_of_module ~modules ~obj_dir (Immediate (m, ml_kind)) ~for_
+let read_immediate_deps_of ~sctx ~obj_dir ~modules ~ml_kind ~for_ m =
+  read_deps_of_module ~sctx ~modules ~obj_dir (Immediate (m, ml_kind)) ~for_
 ;;
 
-let read_deps_of ~obj_dir ~modules ~ml_kind ~for_ m =
+let read_deps_of ~sctx ~obj_dir ~modules ~ml_kind ~for_ m =
   if Module.has m ~ml_kind
-  then read_deps_of_module ~modules ~obj_dir (Transitive (m, ml_kind)) ~for_
+  then read_deps_of_module ~sctx ~modules ~obj_dir (Transitive (m, ml_kind)) ~for_
   else Action_builder.return []
 ;;
 
@@ -227,6 +333,33 @@ let dict_of_func_concurrently f =
   let+ impl = f ~ml_kind:Ml_kind.Impl
   and+ intf = f ~ml_kind:Ml_kind.Intf in
   Ml_kind.Dict.make ~impl ~intf
+;;
+
+(* Shape the per-module dep list the same way the build-rule path does:
+   [Root]/[Alias] have no intra-stanza deps; [Wrapped_compat] has its
+   static alias list; everything else gets its transitive closure
+   augmented with [alias_for]'s modules prepended. *)
+let deps_for_module_from_map ~modules ~immediate ~dir (m : Module.t) =
+  match Module.kind m with
+  | Root | Alias _ -> []
+  | Wrapped_compat -> wrapped_compat_deps modules m
+  | _ ->
+    let transitive = Ocamldep.transitive_closure_from_map ~immediate ~dir m in
+    (match Modules.With_vlib.alias_for modules m with
+     | [] -> transitive
+     | aliases -> aliases @ transitive)
+;;
+
+(* Build a [Dep_graph.t] from a precomputed immediate-deps map. *)
+let dep_graph_from_map ~modules ~dir ~immediate =
+  let per_module =
+    Modules.With_vlib.obj_map modules
+    |> Module_name.Unique.Map.map ~f:(fun sm ->
+      let m = Modules.Sourced_module.to_module sm in
+      let deps = deps_for_module_from_map ~modules ~immediate ~dir m in
+      Action_builder.return deps)
+  in
+  Dep_graph.make ~dir ~per_module
 ;;
 
 let for_module ~obj_dir ~modules ~sandbox ~impl ~dir ~sctx ~for_ module_ =
@@ -244,9 +377,7 @@ let for_module ~obj_dir ~modules ~sandbox ~impl ~dir ~sctx ~for_ module_ =
 ;;
 
 let rules ~obj_dir ~modules ~sandbox ~impl ~sctx ~dir ~for_ ~has_library_deps =
-  match Modules.With_vlib.as_singleton modules with
-  | Some m when not has_library_deps -> Memo.return (Dep_graph.Ml_kind.dummy m)
-  | Some _ | None ->
+  let rules_via_files () =
     dict_of_func_concurrently (fun ~ml_kind ->
       let+ per_module =
         Modules.With_vlib.obj_map modules
@@ -265,4 +396,20 @@ let rules ~obj_dir ~modules ~sandbox ~impl ~sctx ~dir ~for_ ~has_library_deps =
       in
       Dep_graph.make ~dir ~per_module)
     |> Memo.map ~f:(Dep_graph.Ml_kind.for_module_compilation ~modules)
+  in
+  match Modules.With_vlib.as_singleton modules with
+  | Some m when not has_library_deps -> Memo.return (Dep_graph.Ml_kind.dummy m)
+  | Some _ | None ->
+    let try_memo ~ml_kind =
+      immediate_map_memo_opt ~sctx ~modules ~dir ~ml_kind
+    in
+    let* impl_map = try_memo ~ml_kind:Ml_kind.Impl
+    and* intf_map = try_memo ~ml_kind:Ml_kind.Intf in
+    (match impl_map, intf_map with
+     | Some impl_map, Some intf_map ->
+       let impl = dep_graph_from_map ~modules ~dir ~immediate:impl_map in
+       let intf = dep_graph_from_map ~modules ~dir ~immediate:intf_map in
+       Memo.return
+         (Dep_graph.Ml_kind.for_module_compilation ~modules { impl; intf })
+     | _ -> rules_via_files ())
 ;;
