@@ -24,6 +24,9 @@ artifacts
   $ dune build
   Error: foo__Invalid-module corresponds to an invalid module name
   -> required by _build/default/foo__.ml-gen
+  -> required by _build/default/.foo.objs/byte/foo__.cmi
+  -> required by _build/default/.foo.objs/native/foo.cmx
+  -> required by _build/default/foo.a
   -> required by alias all
   -> required by alias default
   [1]

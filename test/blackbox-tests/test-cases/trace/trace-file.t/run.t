@@ -54,50 +54,6 @@ This captures the commands that are being run:
   }
   {
     "process_args": [
-      "-modules",
-      "-impl",
-      "prog.ml"
-    ],
-    "categories": [],
-    "prog": "ocamldep.opt",
-    "dir": ".",
-    "exit": 0,
-    "rusage": [
-      "inblock",
-      "majflt",
-      "maxrss",
-      "minflt",
-      "nivcsw",
-      "nvcsw",
-      "oublock",
-      "system_cpu_time",
-      "user_cpu_time"
-    ]
-  }
-  {
-    "process_args": [
-      "-modules",
-      "-impl",
-      "prog.ml"
-    ],
-    "categories": [],
-    "prog": "ocamldep.opt",
-    "dir": ".",
-    "exit": 0,
-    "rusage": [
-      "inblock",
-      "majflt",
-      "maxrss",
-      "minflt",
-      "nivcsw",
-      "nvcsw",
-      "oublock",
-      "system_cpu_time",
-      "user_cpu_time"
-    ]
-  }
-  {
-    "process_args": [
       "-w",
       "@1..3@5..28@30..39@43@46..47@49..57@61..62-40",
       "-strict-sequence",
