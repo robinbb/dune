@@ -22,13 +22,9 @@ Reports module dependency cycles inside executables.
   > EOF
 
   $ dune build
-  Error: Dependency cycle between:
-     _build/default/.foo.eobjs/dune__exe__Baz.impl.all-deps
-  -> _build/default/.foo.eobjs/dune__exe__Bar.impl.all-deps
-  -> _build/default/.foo.eobjs/dune__exe__Baz.impl.all-deps
-  -> required by _build/default/.foo.eobjs/dune__exe__Foo.impl.all-deps
-  -> required by _build/default/foo.exe
-  -> required by alias all
-  -> required by alias default
+  Error: dependency cycle between modules in _build/default:
+     Bar
+  -> Baz
+  -> Bar
   [1]
 

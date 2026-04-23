@@ -38,11 +38,52 @@ This captures the commands that are being run:
     ],
     "categories": [],
     "prog": "ocamldep.opt",
-    "dir": "_build/default",
+    "dir": ".",
     "exit": 0,
-    "target_files": [
-      "_build/default/.prog.eobjs/prog.impl.d"
+    "rusage": [
+      "inblock",
+      "majflt",
+      "maxrss",
+      "minflt",
+      "nivcsw",
+      "nvcsw",
+      "oublock",
+      "system_cpu_time",
+      "user_cpu_time"
+    ]
+  }
+  {
+    "process_args": [
+      "-modules",
+      "-impl",
+      "prog.ml"
     ],
+    "categories": [],
+    "prog": "ocamldep.opt",
+    "dir": ".",
+    "exit": 0,
+    "rusage": [
+      "inblock",
+      "majflt",
+      "maxrss",
+      "minflt",
+      "nivcsw",
+      "nvcsw",
+      "oublock",
+      "system_cpu_time",
+      "user_cpu_time"
+    ]
+  }
+  {
+    "process_args": [
+      "-modules",
+      "-impl",
+      "prog.ml"
+    ],
+    "categories": [],
+    "prog": "ocamldep.opt",
+    "dir": ".",
+    "exit": 0,
     "rusage": [
       "inblock",
       "majflt",

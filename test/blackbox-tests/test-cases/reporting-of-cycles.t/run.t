@@ -5,6 +5,10 @@ start running things. In the past, the error was only reported during
 the second run of dune.
 
   $ dune build @simple-repro-case
+  Error: dependency cycle between modules in _build/default/indirect:
+     A
+  -> C
+  -> A
   Error: Dependency cycle between:
      _build/default/y
   -> _build/default/x
@@ -21,6 +25,10 @@ the second run of dune.
   [1]
 
   $ dune build @complex-repro-case
+  Error: dependency cycle between modules in _build/default/indirect:
+     A
+  -> C
+  -> A
   Error: Dependency cycle between:
      _build/default/cd3
   -> _build/default/cd2
@@ -42,8 +50,6 @@ error message.
      A
   -> C
   -> A
-  -> required by _build/default/indirect/a.exe
-  -> required by alias indirect/indirect-deps in indirect/dune:6
   [1]
 
 But when the cycle is due to the cmi files themselves, the message becomes
@@ -51,11 +57,8 @@ cryptic and can involve unrelated files:
 
   $ echo 'val xx : B.t' >> indirect/c.mli
   $ dune build @indirect-deps
-  Error: Dependency cycle between:
-     _build/default/indirect/.a.eobjs/a.impl.all-deps
-  -> _build/default/indirect/.a.eobjs/b.impl.all-deps
-  -> _build/default/indirect/.a.eobjs/c.intf.all-deps
-  -> _build/default/indirect/.a.eobjs/a.impl.all-deps
-  -> required by _build/default/indirect/a.exe
-  -> required by alias indirect/indirect-deps in indirect/dune:6
+  Error: dependency cycle between modules in _build/default/indirect:
+     A
+  -> C
+  -> A
   [1]

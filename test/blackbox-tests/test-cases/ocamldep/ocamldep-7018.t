@@ -36,7 +36,7 @@ First we try to construct X.t directly
   Error: dependency cycle between modules in _build/default:
      Y
   -> X
-  -> X
+  -> Y
   -> required by _build/default/foobar.a
   -> required by alias all
   -> required by alias default
@@ -55,7 +55,7 @@ Now we use a polymorphic type:
   Error: dependency cycle between modules in _build/default:
      Y
   -> X
-  -> X
+  -> Y
   -> required by _build/default/foobar.a
   -> required by alias all
   -> required by alias default

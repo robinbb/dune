@@ -20,16 +20,13 @@ The @check alias should detect dependency cycles
 
   $ dune build @check
   Error: dependency cycle between modules in _build/default:
-     B
-  -> A
+     A
   -> B
-  -> required by alias check
+  -> A
   [1]
   $ dune build @all
   Error: dependency cycle between modules in _build/default:
-     B
-  -> A
+     A
   -> B
-  -> required by _build/default/foo.cma
-  -> required by alias all
+  -> A
   [1]
